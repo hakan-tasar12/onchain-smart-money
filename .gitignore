@@ -1,0 +1,21 @@
+# Secrets — NEVER commit (API keys live here)
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Cache (Etherscan + CoinGecko responses)
+.cache/
+
+# OS
+.DS_Store
+
+# gstack tool artifacts
+.gstack/
+
+# Database and logs (runtime data — not for version control)
+data/
+logs/
+docs/

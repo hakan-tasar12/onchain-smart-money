@@ -1,0 +1,14 @@
+# Smart Money Watchlist
+# Format: address,Label
+#
+# ── EXAMPLE / TEST addresses (real addresses but not active traders — for pipeline testing) ──
+0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045,Vitalik Buterin (test)
+0xde0B295669a9FD93d5F28D9Ec85E40f4cB697BAE,Ethereum Foundation (test)
+#
+# ── VERIFIED smart money (on-chain checked via Etherscan) ──
+# Machi Big Brother — ENS machibigbrother.eth confirmed, 20k+ txs, active leveraged ETH trader, community-watched
+0x020cA66C30beC2c4Fe3861a94E4DB4A498A35872,Machi Big Brother
+# Pranksy — active NFT/memecoin whale (identity: medium confidence)
+0xd387a6e4e84a6c86bd90c158c6028a58cc8ac459,Pranksy (?)
+# ParaFi Capital — fund wallet, sourced from whallets docs (identity: medium confidence)
+0x4655b7ad0b5f5bacb9cf960bbffceb3f0e51f363,ParaFi Capital (?)

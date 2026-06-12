@@ -1,0 +1,11 @@
+[Unit]
+Description=Smart Money Daily PnL + Scoring
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/onchain-smart-money
+ExecStart=/root/onchain-smart-money/.venv/bin/python run_daily.py
+EnvironmentFile=/root/onchain-smart-money/.env
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,10 @@
+[Unit]
+Description=Smart Money Hourly Timer (09:00-19:00 UTC)
+
+[Timer]
+# Every hour, 09:00-19:00 UTC only
+OnCalendar=*-*-* 09,10,11,12,13,14,15,16,17,18,19:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
