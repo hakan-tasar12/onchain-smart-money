@@ -1,5 +1,7 @@
 # onchain-smart-money
 
+[![CI](https://github.com/hakan-tasar12/onchain-smart-money/actions/workflows/ci.yml/badge.svg)](https://github.com/hakan-tasar12/onchain-smart-money/actions/workflows/ci.yml)
+
 Open-source on-chain tracker for Ethereum wallets. Tracks token flows, computes realized PnL with a FIFO engine, scores wallets on four metrics, and sends Telegram alerts when 2+ wallets accumulate the same token.
 
 ![Dashboard — wallet KPIs, token net positions, and recent ETH/token transfers](docs/dashboard.png)
