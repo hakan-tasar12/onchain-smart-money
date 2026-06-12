@@ -20,6 +20,10 @@ can be read correctly:
 - **FIFO matching.** Buys open lots; sells consume the oldest open lots first.
   Realized PnL = proceeds − cost basis of the consumed lots, over a rolling
   **12-month window**.
+- **Exact arithmetic.** All money and amount math runs in Python's `decimal.Decimal`,
+  not binary `float`: a fill sums its cost basis across many lots, and float would
+  accumulate rounding error over those additions. Values are stored in SQLite as
+  their Decimal string form, so they round-trip exactly.
 - **Unknown cost basis.** If a sell has no matching lot (the position was opened
   before the 12-month window), it is recorded as *unmatched* and **excluded from
   PnL — not set to zero**. The **Coverage %** reported per wallet is the fraction
@@ -37,8 +41,9 @@ Stated up front, because what a model *doesn't* do matters as much as what it do
   indicative, not reconciled accounting.
 - **Gas fees and transaction costs are not modeled.**
 - **MEV, sandwiching, and internal contract transfers** are not accounted for.
-- Token amounts are handled as **floating-point, not fixed-point `Decimal`** — fine
-  for analytics, not suitable for exact financial reconciliation.
+- The dominant source of approximation is the **price feed** (daily close), not the
+  arithmetic: the FIFO accounting itself is computed in `Decimal` and persisted
+  exactly (see Methodology), so the matching adds no rounding error of its own.
 - **Daily price granularity** ignores intraday moves; sub-day trades are valued at
   the day's close.
 - Positions opened before the 12-month window have unknown cost basis and are
@@ -91,7 +96,9 @@ Python, SQLite, Etherscan API, CoinGecko API, pandas, Streamlit, Telegram Bot AP
 
 The FIFO accounting core ([`src/fifo.py`](src/fifo.py)) is pure and side-effect
 free, so the PnL math is verified against hand-computed examples — FIFO ordering
-across lots, partial fills, the wash-trade guard, and unmatched (pre-window) sells:
+across lots, partial fills, the wash-trade guard, unmatched (pre-window) sells, and
+exact `Decimal` arithmetic (no float accumulation error). A second suite checks that
+the engine persists those results correctly through the SQLite layer:
 
 ```bash
 pip install -r requirements-dev.txt

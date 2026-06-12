@@ -2,20 +2,22 @@
 
 Each test states the arithmetic in the docstring so the expected numbers can be
 checked by eye — the point is to prove the accounting, not just exercise code.
+Because the core computes in Decimal, the expected values are exact: assertions
+use ``== Decimal(...)``, not floating-point approximation.
 """
-import pytest
+from decimal import Decimal
 
 from src.fifo import match_fifo, Unmatched
 
 
 def const_price(p):
     """A price function that returns the same price regardless of timestamp."""
-    return lambda ts: p
+    return lambda ts: Decimal(str(p))
 
 
-def price_at(mapping, default=0.0):
+def price_at(mapping, default=0):
     """Price function backed by a {timestamp: price} table."""
-    return lambda ts: mapping.get(ts, default)
+    return lambda ts: Decimal(str(mapping.get(ts, default)))
 
 
 def buy(ts, amount, _id=0):
@@ -29,20 +31,20 @@ def sell(ts, amount, _id=0):
 def test_single_round_trip_profit():
     """Buy 10 @ $1, sell 10 @ $2 -> proceeds 20, cost 10, PnL +10."""
     txns = [buy(0, 10), sell(100, 10)]
-    r = match_fifo(txns, price_at({0: 1.0, 100: 2.0}))
+    r = match_fifo(txns, price_at({0: 1, 100: 2}))
     assert r.trades_closed == 1
     f = r.fills[0]
-    assert f.cost_basis == pytest.approx(10.0)
-    assert f.proceeds == pytest.approx(20.0)
-    assert f.realized_pnl == pytest.approx(10.0)
-    assert r.realized_pnl == pytest.approx(10.0)
+    assert f.cost_basis == Decimal("10")
+    assert f.proceeds == Decimal("20")
+    assert f.realized_pnl == Decimal("10")
+    assert r.realized_pnl == Decimal("10")
     assert r.unmatched == []
 
 
 def test_round_trip_loss():
     """Buy 10 @ $3, sell 10 @ $1 -> PnL -20."""
-    r = match_fifo([buy(0, 10), sell(100, 10)], price_at({0: 3.0, 100: 1.0}))
-    assert r.realized_pnl == pytest.approx(-20.0)
+    r = match_fifo([buy(0, 10), sell(100, 10)], price_at({0: 3, 100: 1}))
+    assert r.realized_pnl == Decimal("-20")
 
 
 def test_fifo_consumes_oldest_first_across_lots():
@@ -52,53 +54,53 @@ def test_fifo_consumes_oldest_first_across_lots():
     Proceeds 15*3 = 45 -> PnL 25. Lot2 keeps 5 units open.
     """
     txns = [buy(0, 10, 1), buy(100, 10, 2), sell(200, 15, 3)]
-    r = match_fifo(txns, price_at({0: 1.0, 100: 2.0, 200: 3.0}))
+    r = match_fifo(txns, price_at({0: 1, 100: 2, 200: 3}))
     f = r.fills[0]
-    assert f.cost_basis == pytest.approx(20.0)
-    assert f.proceeds == pytest.approx(45.0)
-    assert f.realized_pnl == pytest.approx(25.0)
+    assert f.cost_basis == Decimal("20")
+    assert f.proceeds == Decimal("45")
+    assert f.realized_pnl == Decimal("25")
     # lot1 fully consumed, lot2 has 5 remaining
     remaining = sorted(lot.remaining for lot in r.lots)
-    assert remaining == pytest.approx([0.0, 5.0])
+    assert remaining == [Decimal("0"), Decimal("5")]
 
 
 def test_oversell_records_partial_no_lot():
     """Buy 5 @ $1, sell 8 @ $2. Match 5 (PnL +5); surplus 3 -> partial_no_lot."""
-    r = match_fifo([buy(0, 5), sell(100, 8)], price_at({0: 1.0, 100: 2.0}))
-    assert r.realized_pnl == pytest.approx(5.0)
+    r = match_fifo([buy(0, 5), sell(100, 8)], price_at({0: 1, 100: 2}))
+    assert r.realized_pnl == Decimal("5")
     assert len(r.unmatched) == 1
     u = r.unmatched[0]
     assert u.reason == "partial_no_lot"
-    assert u.amount == pytest.approx(3.0)
+    assert u.amount == Decimal("3")
 
 
 def test_sell_with_no_lot_is_unmatched_not_free_profit():
     """Sell 10 with no prior buy -> unmatched 'no_lot', never zero-cost profit."""
-    r = match_fifo([sell(0, 10)], const_price(2.0))
+    r = match_fifo([sell(0, 10)], const_price(2))
     assert r.fills == []
-    assert r.realized_pnl == 0.0
-    assert r.unmatched == [Unmatched(0, "TKN", 10.0, "no_lot")]
+    assert r.realized_pnl == Decimal("0")
+    assert r.unmatched == [Unmatched(0, "TKN", Decimal("10"), "no_lot")]
 
 
 def test_wash_trade_is_skipped_and_lot_untouched():
     """Sell 30s after buy (< 60s) -> wash trade: skipped, lot stays full."""
-    r = match_fifo([buy(0, 10), sell(30, 10)], price_at({0: 1.0, 30: 2.0}))
+    r = match_fifo([buy(0, 10), sell(30, 10)], price_at({0: 1, 30: 2}))
     assert r.wash_skipped == 1
     assert r.fills == []
-    assert r.lots[0].remaining == pytest.approx(10.0)  # not consumed
+    assert r.lots[0].remaining == Decimal("10")  # not consumed
 
 
 def test_wash_guard_boundary_at_60s_is_not_a_wash():
     """Exactly 60s is NOT < 60 -> the sell matches normally."""
-    r = match_fifo([buy(0, 10), sell(60, 10)], price_at({0: 1.0, 60: 2.0}))
+    r = match_fifo([buy(0, 10), sell(60, 10)], price_at({0: 1, 60: 2}))
     assert r.wash_skipped == 0
     assert r.trades_closed == 1
-    assert r.realized_pnl == pytest.approx(10.0)
+    assert r.realized_pnl == Decimal("10")
 
 
 def test_dust_amounts_are_ignored():
     """Sub-1e-9 transfers are noise and must not create lots or fills."""
-    r = match_fifo([buy(0, 1e-12), sell(100, 1e-12)], const_price(1.0))
+    r = match_fifo([buy(0, 1e-12), sell(100, 1e-12)], const_price(1))
     assert r.lots_created == 0
     assert r.fills == []
     assert r.unmatched == []
@@ -108,8 +110,8 @@ def test_unsorted_input_is_processed_in_time_order():
     """Transfers given out of order are sorted by (block_ts, id) before matching."""
     # Same as the FIFO test but shuffled.
     txns = [sell(200, 15, 3), buy(100, 10, 2), buy(0, 10, 1)]
-    r = match_fifo(txns, price_at({0: 1.0, 100: 2.0, 200: 3.0}))
-    assert r.realized_pnl == pytest.approx(25.0)
+    r = match_fifo(txns, price_at({0: 1, 100: 2, 200: 3}))
+    assert r.realized_pnl == Decimal("25")
 
 
 def test_price_function_called_per_event():
@@ -118,8 +120,25 @@ def test_price_function_called_per_event():
 
     def tracking_price(ts):
         calls.append(ts)
-        return 1.0
+        return Decimal("1")
 
     match_fifo([buy(0, 10, 1), buy(100, 10, 2), sell(200, 15, 3)], tracking_price)
     # two buys priced + one sell priced = 3 calls
     assert calls == [0, 100, 200]
+
+
+def test_decimal_avoids_float_accumulation_error():
+    """0.1 * 3 in float is 0.30000000000000004; the Decimal core must be exact.
+
+    Buy 0.3 @ $1, then sell it in three 0.1 slices priced at $1 — cost basis and
+    proceeds must land on exactly 0.1 each and 0.3 total, with zero residue.
+    """
+    txns = [buy(0, Decimal("0.3"), 1),
+            sell(100, Decimal("0.1"), 2),
+            sell(200, Decimal("0.1"), 3),
+            sell(300, Decimal("0.1"), 4)]
+    r = match_fifo(txns, const_price(1))
+    assert r.realized_pnl == Decimal("0")           # bought and sold at $1
+    assert sum((f.proceeds for f in r.fills), Decimal("0")) == Decimal("0.3")
+    # the lot is fully consumed — no floating-point dust left behind
+    assert all(lot.remaining == Decimal("0") for lot in r.lots)
