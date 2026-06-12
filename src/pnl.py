@@ -3,6 +3,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import requests
@@ -15,7 +16,7 @@ from src.db import (
     insert_pnl_record,
     insert_unmatched_sell,
 )
-from src.fifo import match_fifo
+from src.fifo import EPS, match_fifo
 from src.prices import _contract_to_id_map
 
 log = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ def _process_wallet_pnl(wallet_address: str, cmap: dict) -> dict:
     transfers = get_token_transfers_for_pnl(wallet_address, since_ts=since_ts)
 
     contracts = list({t["contract"] for t in transfers})
-    stats = {"lots_created": 0, "trades_closed": 0, "total_pnl": 0.0,
+    stats = {"lots_created": 0, "trades_closed": 0, "total_pnl": Decimal("0"),
              "unmatched": 0, "wash_skipped": 0}
 
     for contract in contracts:
@@ -82,14 +83,16 @@ def _process_wallet_pnl(wallet_address: str, cmap: dict) -> dict:
 
         # FIFO matching is delegated to the pure, unit-tested core (src/fifo.py).
         # This module only handles I/O: pricing (CoinGecko) and persistence (SQLite).
+        # CoinGecko returns float prices; convert to Decimal at this boundary via
+        # str() so the accounting core stays exact.
         result = match_fifo(
             contract_txns,
-            price_fn=lambda ts, _cid=coin_id: _get_historical_price(_cid, ts),
+            price_fn=lambda ts, _cid=coin_id: Decimal(str(_get_historical_price(_cid, ts))),
         )
 
         # Persist open lots (final remaining), realized fills, and unmatched sells.
         for lot in result.lots:
-            if lot.remaining > 1e-9:
+            if lot.remaining > EPS:
                 insert_pnl_lot(
                     wallet_address=wallet_address,
                     contract=contract,

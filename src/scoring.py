@@ -90,7 +90,9 @@ def run_scoring(watchlist_path: str = "watchlist.txt") -> None:
         upsert_score(
             wallet_address=addr,
             win_rate=m["win_rate"],
-            realized_pnl=m["realized_pnl"],
+            # realized_pnl is summed in Decimal for exactness; the scores table is a
+            # ranking aggregate, so float is fine (and required) for its REAL column.
+            realized_pnl=float(m["realized_pnl"]),
             early_entry=m["early_entry"],
             diversity=m["diversity"],
             composite=composite,

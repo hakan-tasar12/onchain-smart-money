@@ -4,9 +4,28 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 DB_PATH = Path("data/smart_money.db")
+
+# Money/amount columns are stored as TEXT (the Decimal's string form), not REAL,
+# so values round-trip exactly: float storage would re-introduce the rounding
+# error the Decimal accounting in src/fifo.py exists to avoid. These helpers
+# serialise on the way in and rehydrate on the way out.
+
+
+def _money_str(value) -> str:
+    """Serialise a Decimal/number to its canonical string for TEXT storage."""
+    return str(value if isinstance(value, Decimal) else Decimal(str(value)))
+
+
+def _money_keys(row: dict, *keys: str) -> dict:
+    """Rehydrate the given TEXT columns of a row dict back into Decimals."""
+    for k in keys:
+        if row.get(k) is not None:
+            row[k] = Decimal(row[k])
+    return row
 
 
 @contextmanager
@@ -65,8 +84,8 @@ def init_db() -> None:
                 wallet_address      TEXT NOT NULL,
                 contract            TEXT NOT NULL,
                 acquired_ts         INTEGER NOT NULL,
-                amount_remaining    REAL NOT NULL,
-                cost_usd_per_unit   REAL NOT NULL
+                amount_remaining    TEXT NOT NULL,   -- Decimal string (exact)
+                cost_usd_per_unit   TEXT NOT NULL    -- Decimal string (exact)
             );
 
             CREATE TABLE IF NOT EXISTS pnl_history (
@@ -75,9 +94,9 @@ def init_db() -> None:
                 contract        TEXT NOT NULL,
                 symbol          TEXT,
                 close_ts        INTEGER NOT NULL,
-                realized_pnl    REAL NOT NULL,
-                cost_basis      REAL NOT NULL,
-                proceeds        REAL NOT NULL,
+                realized_pnl    TEXT NOT NULL,       -- Decimal string (exact)
+                cost_basis      TEXT NOT NULL,       -- Decimal string (exact)
+                proceeds        TEXT NOT NULL,       -- Decimal string (exact)
                 computed_at     TEXT NOT NULL
             );
 
@@ -87,7 +106,7 @@ def init_db() -> None:
                 contract        TEXT NOT NULL,
                 symbol          TEXT,
                 close_ts        INTEGER NOT NULL,
-                amount          REAL NOT NULL,
+                amount          TEXT NOT NULL,       -- Decimal string (exact)
                 reason          TEXT NOT NULL,
                 computed_at     TEXT NOT NULL
             );
@@ -204,34 +223,39 @@ def get_recent_token_accumulations(hours: int = 1) -> list[dict]:
 # ── PnL lots ─────────────────────────────────────────────────────────────────
 
 def get_pnl_lots(wallet_address: str, contract: str) -> list[dict]:
+    # amount_remaining is TEXT (a Decimal string), so the "still open" filter is
+    # applied in Python after rehydration — a numeric SQL comparison on a TEXT
+    # column would compare lexically, not by value.
     with get_conn() as conn:
         rows = conn.execute(
             """SELECT * FROM pnl_lots
-               WHERE wallet_address = ? AND contract = ? AND amount_remaining > 1e-9
+               WHERE wallet_address = ? AND contract = ?
                ORDER BY acquired_ts ASC, id ASC""",
             (wallet_address.lower(), contract.lower()),
         ).fetchall()
-    return [dict(r) for r in rows]
+    lots = [_money_keys(dict(r), "amount_remaining", "cost_usd_per_unit") for r in rows]
+    return [lot for lot in lots if lot["amount_remaining"] > Decimal("1e-9")]
 
 
 def insert_pnl_lot(
     wallet_address: str, contract: str, acquired_ts: int,
-    amount: float, cost_usd_per_unit: float,
+    amount, cost_usd_per_unit,
 ) -> None:
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO pnl_lots
                (wallet_address, contract, acquired_ts, amount_remaining, cost_usd_per_unit)
                VALUES (?, ?, ?, ?, ?)""",
-            (wallet_address.lower(), contract.lower(), acquired_ts, amount, cost_usd_per_unit),
+            (wallet_address.lower(), contract.lower(), acquired_ts,
+             _money_str(amount), _money_str(cost_usd_per_unit)),
         )
 
 
-def update_lot_remaining(lot_id: int, new_remaining: float) -> None:
+def update_lot_remaining(lot_id: int, new_remaining) -> None:
     with get_conn() as conn:
         conn.execute(
             "UPDATE pnl_lots SET amount_remaining = ? WHERE id = ?",
-            (new_remaining, lot_id),
+            (_money_str(new_remaining), lot_id),
         )
 
 
@@ -239,7 +263,7 @@ def update_lot_remaining(lot_id: int, new_remaining: float) -> None:
 
 def insert_pnl_record(
     wallet_address: str, contract: str, symbol: str,
-    close_ts: int, realized_pnl: float, cost_basis: float, proceeds: float,
+    close_ts: int, realized_pnl, cost_basis, proceeds,
 ) -> None:
     with get_conn() as conn:
         conn.execute(
@@ -248,7 +272,7 @@ def insert_pnl_record(
                 cost_basis, proceeds, computed_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (wallet_address.lower(), contract.lower(), symbol, close_ts,
-             realized_pnl, cost_basis, proceeds,
+             _money_str(realized_pnl), _money_str(cost_basis), _money_str(proceeds),
              datetime.now(timezone.utc).isoformat()),
         )
 
@@ -259,22 +283,22 @@ def get_pnl_history(wallet_address: str) -> list[dict]:
             "SELECT * FROM pnl_history WHERE wallet_address = ? ORDER BY close_ts DESC",
             (wallet_address.lower(),),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [_money_keys(dict(r), "realized_pnl", "cost_basis", "proceeds") for r in rows]
 
 
 # ── Unmatched sells ───────────────────────────────────────────────────────────
 
 def insert_unmatched_sell(
     wallet_address: str, contract: str, symbol: str,
-    close_ts: int, amount: float, reason: str,
+    close_ts: int, amount, reason: str,
 ) -> None:
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO unmatched_sells
                (wallet_address, contract, symbol, close_ts, amount, reason, computed_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (wallet_address.lower(), contract.lower(), symbol, close_ts, amount, reason,
-             datetime.now(timezone.utc).isoformat()),
+            (wallet_address.lower(), contract.lower(), symbol, close_ts,
+             _money_str(amount), reason, datetime.now(timezone.utc).isoformat()),
         )
 
 
