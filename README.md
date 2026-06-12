@@ -85,6 +85,17 @@ VPS scheduler: `bash deploy/setup_systemd.sh`
 
 Python, SQLite, Etherscan API, CoinGecko API, pandas, Streamlit, Telegram Bot API
 
+## Tests
+
+The FIFO accounting core ([`src/fifo.py`](src/fifo.py)) is pure and side-effect
+free, so the PnL math is verified against hand-computed examples — FIFO ordering
+across lots, partial fills, the wash-trade guard, and unmatched (pre-window) sells:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
 ## Roadmap
 
 - [x] A — Watchlist tracker
