@@ -10,13 +10,12 @@ import requests
 from src.db import (
     clear_pnl_data,
     get_pnl_coverage,
-    get_pnl_lots,
     get_token_transfers_for_pnl,
     insert_pnl_lot,
     insert_pnl_record,
     insert_unmatched_sell,
-    update_lot_remaining,
 )
+from src.fifo import match_fifo
 from src.prices import _contract_to_id_map
 
 log = logging.getLogger(__name__)
@@ -80,80 +79,45 @@ def _process_wallet_pnl(wallet_address: str, cmap: dict) -> dict:
             continue  # not in CoinGecko, likely spam — skip
 
         contract_txns = [t for t in transfers if t["contract"] == contract]
-        contract_txns.sort(key=lambda x: (x["block_ts"], x["id"]))
 
-        for tx in contract_txns:
-            amount = abs(tx["amount"])
-            if amount < 1e-9:
-                continue
+        # FIFO matching is delegated to the pure, unit-tested core (src/fifo.py).
+        # This module only handles I/O: pricing (CoinGecko) and persistence (SQLite).
+        result = match_fifo(
+            contract_txns,
+            price_fn=lambda ts, _cid=coin_id: _get_historical_price(_cid, ts),
+        )
 
-            symbol = tx.get("symbol") or "?"
-
-            if tx["amount"] > 0:  # IN — buy, open new lot
-                price = _get_historical_price(coin_id, tx["block_ts"])
+        # Persist open lots (final remaining), realized fills, and unmatched sells.
+        for lot in result.lots:
+            if lot.remaining > 1e-9:
                 insert_pnl_lot(
                     wallet_address=wallet_address,
                     contract=contract,
-                    acquired_ts=tx["block_ts"],
-                    amount=amount,
-                    cost_usd_per_unit=price,
+                    acquired_ts=lot.acquired_ts,
+                    amount=lot.remaining,
+                    cost_usd_per_unit=lot.cost_per_unit,
                 )
-                stats["lots_created"] += 1
+        for fill in result.fills:
+            insert_pnl_record(
+                wallet_address=wallet_address,
+                contract=contract,
+                symbol=fill.symbol,
+                close_ts=fill.close_ts,
+                realized_pnl=fill.realized_pnl,
+                cost_basis=fill.cost_basis,
+                proceeds=fill.proceeds,
+            )
+        for unmatched in result.unmatched:
+            insert_unmatched_sell(
+                wallet_address, contract, unmatched.symbol,
+                unmatched.ts, unmatched.amount, unmatched.reason,
+            )
 
-            else:  # OUT — sell/transfer, consume lots FIFO
-                lots = get_pnl_lots(wallet_address, contract)
-
-                if not lots:
-                    # no lot found — position was opened before the 12-month window, cost basis unknown
-                    insert_unmatched_sell(
-                        wallet_address, contract, symbol, tx["block_ts"], amount, "no_lot"
-                    )
-                    stats["unmatched"] += 1
-                    continue
-
-                # Wash-trade guard: oldest open lot < 60 s old (intraday round-trip / arbitrage)
-                oldest_acquired = lots[0]["acquired_ts"]
-                if (tx["block_ts"] - oldest_acquired) < 60:
-                    stats["wash_skipped"] += 1
-                    continue
-
-                sell_price = _get_historical_price(coin_id, tx["block_ts"])
-                remaining_to_sell = amount
-                total_cost = 0.0
-                total_proceeds = 0.0
-
-                for lot in lots:
-                    if remaining_to_sell <= 1e-9:
-                        break
-                    used = min(lot["amount_remaining"], remaining_to_sell)
-                    total_cost += used * lot["cost_usd_per_unit"]
-                    total_proceeds += used * sell_price
-                    update_lot_remaining(lot["id"], lot["amount_remaining"] - used)
-                    remaining_to_sell -= used
-
-                # Record PnL for the matched portion
-                matched_amount = amount - remaining_to_sell
-                if matched_amount > 1e-9:
-                    realized_pnl = total_proceeds - total_cost
-                    insert_pnl_record(
-                        wallet_address=wallet_address,
-                        contract=contract,
-                        symbol=symbol,
-                        close_ts=tx["block_ts"],
-                        realized_pnl=realized_pnl,
-                        cost_basis=total_cost,
-                        proceeds=total_proceeds,
-                    )
-                    stats["trades_closed"] += 1
-                    stats["total_pnl"] += realized_pnl
-
-                # sold more than available lots — surplus came from a pre-window position
-                if remaining_to_sell > 1e-9:
-                    insert_unmatched_sell(
-                        wallet_address, contract, symbol, tx["block_ts"],
-                        remaining_to_sell, "partial_no_lot"
-                    )
-                    stats["unmatched"] += 1
+        stats["lots_created"] += result.lots_created
+        stats["trades_closed"] += result.trades_closed
+        stats["total_pnl"] += result.realized_pnl
+        stats["unmatched"] += len(result.unmatched)
+        stats["wash_skipped"] += result.wash_skipped
 
     return stats
 

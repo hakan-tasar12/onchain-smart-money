@@ -1,0 +1,125 @@
+"""Hand-computed tests for the FIFO PnL core (src/fifo.py).
+
+Each test states the arithmetic in the docstring so the expected numbers can be
+checked by eye — the point is to prove the accounting, not just exercise code.
+"""
+import pytest
+
+from src.fifo import match_fifo, Unmatched
+
+
+def const_price(p):
+    """A price function that returns the same price regardless of timestamp."""
+    return lambda ts: p
+
+
+def price_at(mapping, default=0.0):
+    """Price function backed by a {timestamp: price} table."""
+    return lambda ts: mapping.get(ts, default)
+
+
+def buy(ts, amount, _id=0):
+    return {"block_ts": ts, "amount": amount, "id": _id, "symbol": "TKN"}
+
+
+def sell(ts, amount, _id=0):
+    return {"block_ts": ts, "amount": -amount, "id": _id, "symbol": "TKN"}
+
+
+def test_single_round_trip_profit():
+    """Buy 10 @ $1, sell 10 @ $2 -> proceeds 20, cost 10, PnL +10."""
+    txns = [buy(0, 10), sell(100, 10)]
+    r = match_fifo(txns, price_at({0: 1.0, 100: 2.0}))
+    assert r.trades_closed == 1
+    f = r.fills[0]
+    assert f.cost_basis == pytest.approx(10.0)
+    assert f.proceeds == pytest.approx(20.0)
+    assert f.realized_pnl == pytest.approx(10.0)
+    assert r.realized_pnl == pytest.approx(10.0)
+    assert r.unmatched == []
+
+
+def test_round_trip_loss():
+    """Buy 10 @ $3, sell 10 @ $1 -> PnL -20."""
+    r = match_fifo([buy(0, 10), sell(100, 10)], price_at({0: 3.0, 100: 1.0}))
+    assert r.realized_pnl == pytest.approx(-20.0)
+
+
+def test_fifo_consumes_oldest_first_across_lots():
+    """Buy 10 @ $1 (t0), buy 10 @ $2 (t100), sell 15 @ $3 (t200).
+
+    FIFO: 10 from lot1 (cost 10) + 5 from lot2 (cost 10) = cost 20.
+    Proceeds 15*3 = 45 -> PnL 25. Lot2 keeps 5 units open.
+    """
+    txns = [buy(0, 10, 1), buy(100, 10, 2), sell(200, 15, 3)]
+    r = match_fifo(txns, price_at({0: 1.0, 100: 2.0, 200: 3.0}))
+    f = r.fills[0]
+    assert f.cost_basis == pytest.approx(20.0)
+    assert f.proceeds == pytest.approx(45.0)
+    assert f.realized_pnl == pytest.approx(25.0)
+    # lot1 fully consumed, lot2 has 5 remaining
+    remaining = sorted(lot.remaining for lot in r.lots)
+    assert remaining == pytest.approx([0.0, 5.0])
+
+
+def test_oversell_records_partial_no_lot():
+    """Buy 5 @ $1, sell 8 @ $2. Match 5 (PnL +5); surplus 3 -> partial_no_lot."""
+    r = match_fifo([buy(0, 5), sell(100, 8)], price_at({0: 1.0, 100: 2.0}))
+    assert r.realized_pnl == pytest.approx(5.0)
+    assert len(r.unmatched) == 1
+    u = r.unmatched[0]
+    assert u.reason == "partial_no_lot"
+    assert u.amount == pytest.approx(3.0)
+
+
+def test_sell_with_no_lot_is_unmatched_not_free_profit():
+    """Sell 10 with no prior buy -> unmatched 'no_lot', never zero-cost profit."""
+    r = match_fifo([sell(0, 10)], const_price(2.0))
+    assert r.fills == []
+    assert r.realized_pnl == 0.0
+    assert r.unmatched == [Unmatched(0, "TKN", 10.0, "no_lot")]
+
+
+def test_wash_trade_is_skipped_and_lot_untouched():
+    """Sell 30s after buy (< 60s) -> wash trade: skipped, lot stays full."""
+    r = match_fifo([buy(0, 10), sell(30, 10)], price_at({0: 1.0, 30: 2.0}))
+    assert r.wash_skipped == 1
+    assert r.fills == []
+    assert r.lots[0].remaining == pytest.approx(10.0)  # not consumed
+
+
+def test_wash_guard_boundary_at_60s_is_not_a_wash():
+    """Exactly 60s is NOT < 60 -> the sell matches normally."""
+    r = match_fifo([buy(0, 10), sell(60, 10)], price_at({0: 1.0, 60: 2.0}))
+    assert r.wash_skipped == 0
+    assert r.trades_closed == 1
+    assert r.realized_pnl == pytest.approx(10.0)
+
+
+def test_dust_amounts_are_ignored():
+    """Sub-1e-9 transfers are noise and must not create lots or fills."""
+    r = match_fifo([buy(0, 1e-12), sell(100, 1e-12)], const_price(1.0))
+    assert r.lots_created == 0
+    assert r.fills == []
+    assert r.unmatched == []
+
+
+def test_unsorted_input_is_processed_in_time_order():
+    """Transfers given out of order are sorted by (block_ts, id) before matching."""
+    # Same as the FIFO test but shuffled.
+    txns = [sell(200, 15, 3), buy(100, 10, 2), buy(0, 10, 1)]
+    r = match_fifo(txns, price_at({0: 1.0, 100: 2.0, 200: 3.0}))
+    assert r.realized_pnl == pytest.approx(25.0)
+
+
+def test_price_function_called_per_event():
+    """price_fn is called once per buy and once per matched sell (not per lot)."""
+    calls = []
+
+    def tracking_price(ts):
+        calls.append(ts)
+        return 1.0
+
+    match_fifo([buy(0, 10, 1), buy(100, 10, 2), sell(200, 15, 3)], tracking_price)
+    # two buys priced + one sell priced = 3 calls
+    assert calls == [0, 100, 200]
