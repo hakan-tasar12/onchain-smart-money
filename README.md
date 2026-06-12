@@ -2,6 +2,8 @@
 
 Open-source on-chain tracker for Ethereum wallets. Tracks token flows, computes realized PnL with a FIFO engine, scores wallets on four metrics, and sends Telegram alerts when 2+ wallets accumulate the same token.
 
+![Dashboard — wallet KPIs, token net positions, and recent ETH/token transfers](docs/dashboard.png)
+
 ## How it works
 
 The tracker reads ETH balances and ERC-20 transfers from Etherscan, stores 12 months of history in SQLite, and computes the net position per token to flag each wallet as accumulating or distributing. On top of that, a FIFO PnL engine prices each lot, a daily job scores every wallet, and consensus alerts fire when independent wallets converge on the same token.

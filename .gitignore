@@ -18,4 +18,5 @@ __pycache__/
 # Database and logs (runtime data — not for version control)
 data/
 logs/
-docs/
+docs/*
+!docs/dashboard.png
