@@ -1,18 +1,47 @@
 # onchain-smart-money
 
-Open-source on-chain tracker for Ethereum wallets. Tracks token flows, computes realized PnL with a FIFO engine, scores wallets on four metrics, and sends Telegram alerts when 2+ wallets accumulate the same token. Built with Claude.
+Open-source on-chain tracker for Ethereum wallets. Tracks token flows, computes realized PnL with a FIFO engine, scores wallets on four metrics, and sends Telegram alerts when 2+ wallets accumulate the same token.
 
 ## How it works
 
-Project A reads ETH balances and token transfers from Etherscan, computes net position per token, and flags each wallet as accumulating or distributing.
+The tracker reads ETH balances and ERC-20 transfers from Etherscan, stores 12 months of history in SQLite, and computes the net position per token to flag each wallet as accumulating or distributing. On top of that, a FIFO PnL engine prices each lot, a daily job scores every wallet, and consensus alerts fire when independent wallets converge on the same token.
 
-Project B (current) stores 12 months of transfers in SQLite, runs a FIFO PnL engine on top, scores each wallet daily, and fires consensus alerts.
+## Methodology
 
-## PnL note
+PnL and scoring rest on a few explicit conventions — stated here so the numbers
+can be read correctly:
 
-Prices come from CoinGecko daily-close data, not the actual swap price, so the numbers are approximate. If a wallet opened a position before the 12-month window, the cost basis is unknown — those sells are excluded from PnL, not set to zero. Coverage % shows how reliable each wallet's data is.
+- **Pricing.** Tokens are priced by **contract address, not symbol**, so a
+  symbol-spoofed scam token can never match a legitimate one. Historical PnL uses
+  CoinGecko **daily-close** prices — not the actual swap execution price — so
+  realized figures are *approximate*, not exact accounting.
+- **FIFO matching.** Buys open lots; sells consume the oldest open lots first.
+  Realized PnL = proceeds − cost basis of the consumed lots, over a rolling
+  **12-month window**.
+- **Unknown cost basis.** If a sell has no matching lot (the position was opened
+  before the 12-month window), it is recorded as *unmatched* and **excluded from
+  PnL — not set to zero**. The **Coverage %** reported per wallet is the fraction
+  of sells with a known cost basis, i.e. how much to trust that wallet's PnL.
+- **Wash-trade guard.** Sells against a lot younger than **60 seconds** are
+  skipped, to drop intraday round-trips and arbitrage noise.
+- **Spam filtering.** Tokens absent from CoinGecko are dropped; a regex catches
+  phishing names ("claim", "reward", URL patterns).
 
-Spam tokens are filtered by contract address (anything not on CoinGecko gets dropped) and a regex that catches phishing names like "claim", "reward", and URL patterns.
+## Assumptions & limitations
+
+Stated up front, because what a model *doesn't* do matters as much as what it does:
+
+- Prices are **daily-close approximations**, not execution prices — realized PnL is
+  indicative, not reconciled accounting.
+- **Gas fees and transaction costs are not modeled.**
+- **MEV, sandwiching, and internal contract transfers** are not accounted for.
+- Token amounts are handled as **floating-point, not fixed-point `Decimal`** — fine
+  for analytics, not suitable for exact financial reconciliation.
+- **Daily price granularity** ignores intraday moves; sub-day trades are valued at
+  the day's close.
+- Positions opened before the 12-month window have unknown cost basis and are
+  excluded (see Coverage above).
+- This is an **analytics tool, not a trading system, and not financial advice.**
 
 ## Setup
 
@@ -61,3 +90,7 @@ Python, SQLite, Etherscan API, CoinGecko API, pandas, Streamlit, Telegram Bot AP
 - [x] A — Watchlist tracker
 - [x] B — Smart money dashboard (current)
 - [ ] C — Alpha discovery engine
+
+## License
+
+MIT — see [LICENSE](LICENSE).
