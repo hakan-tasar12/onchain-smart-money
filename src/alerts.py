@@ -3,31 +3,24 @@ import logging
 import os
 import time
 
-import requests
-
 from src.db import get_last_alert_ts, get_recent_token_accumulations, insert_alert
+from src.telegram_api import inline_keyboard, send_message
 
 log = logging.getLogger(__name__)
 
 COOLDOWN_SECONDS = 6 * 3600  # minimum gap between alerts for the same contract
 
 
-def send_telegram(message: str) -> bool:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+def send_telegram(message: str, reply_markup: dict | None = None) -> bool:
+    """Send a one-way alert to the configured chat. Returns True on success."""
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
-        log.error("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing")
+    if not chat_id:
+        log.error("TELEGRAM_CHAT_ID missing")
         return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
-            timeout=10,
-        )
-        return r.json().get("ok", False)
-    except Exception as e:
-        log.error(f"Telegram send error: {e}")
-        return False
+    # A single chat id is the alert target even when several are authorized for
+    # the interactive bot (TELEGRAM_CHAT_ID may be comma-separated).
+    chat_id = chat_id.split(",")[0].strip()
+    return send_message(chat_id, message, reply_markup=reply_markup).get("ok", False)
 
 
 def _format_alert(contract: str, symbol: str, wallets: list[str], wallet_labels: dict) -> str:
@@ -65,7 +58,9 @@ def run_alerts(watchlist_path: str = "watchlist.txt") -> int:
             continue
 
         message = _format_alert(contract, symbol, wallet_addrs, wallet_labels)
-        ok = send_telegram(message)
+        # Drill-down buttons: the interactive bot answers these callbacks.
+        buttons = inline_keyboard([[("📊 Holders", f"tok:{contract}"), ("🏆 Top", "top")]])
+        ok = send_telegram(message, reply_markup=buttons)
         insert_alert(contract, symbol, wallet_addrs, ok)
 
         if ok:
