@@ -297,22 +297,43 @@ def get_token_net_holders(contract: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# Stablecoins carry no directional signal: a wallet "accumulating" USDC is just
+# parking cash, not making a bet. Excluding them keeps consensus alerts and /movers
+# focused on actual conviction. Contracts are lowercase Ethereum mainnet addresses.
+STABLECOIN_CONTRACTS = {
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",  # USDC
+    "0xdac17f958d2ee523a2206206994597c13d831ec7",  # USDT
+    "0x6b175474e89094c44da98b954eedeac495271d0f",  # DAI
+    "0x4fabb145d64652a948d72533023f6e7a623c7c53",  # BUSD
+    "0x0000000000085d4780b73119b644ae5ecd22b376",  # TUSD
+    "0x8e870d67f660d95d5be530380d0ec0bd388289e1",  # USDP (Pax Dollar)
+    "0x853d955acef822db058eb8505911ed77f175b99e",  # FRAX
+    "0x5f98805a4e8be255a32880fdec7f6728c6568ba0",  # LUSD
+    "0x056fd409e1d7a124bd7017459dfea2f387b6d5cd",  # GUSD
+}
+
+
 def get_recent_token_accumulations(hours: int = 1) -> list[dict]:
-    """Tokens with IN transfers from 2 or more distinct wallets in the last N hours."""
+    """Tokens with IN transfers from 2+ distinct wallets in the last N hours.
+
+    Stablecoins are excluded — parking cash in USDC/USDT is not a conviction signal.
+    """
     since_ts = int(time.time()) - hours * 3600
+    placeholders = ",".join("?" * len(STABLECOIN_CONTRACTS))
     with get_conn() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT contract, symbol,
                    COUNT(DISTINCT wallet_address) AS wallet_count,
                    GROUP_CONCAT(DISTINCT wallet_address) AS wallets
             FROM token_transfers
             WHERE block_ts >= ? AND amount > 0
+              AND LOWER(contract) NOT IN ({placeholders})
             GROUP BY contract
             HAVING wallet_count >= 2
             ORDER BY wallet_count DESC
             """,
-            (since_ts,),
+            (since_ts, *sorted(STABLECOIN_CONTRACTS)),
         ).fetchall()
     return [dict(r) for r in rows]
 
