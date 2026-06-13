@@ -1,11 +1,14 @@
 """SQLite initialisation and CRUD helpers."""
 import json
+import logging
 import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 DB_PATH = Path("data/smart_money.db")
 
@@ -46,8 +49,41 @@ def get_conn():
         conn.close()
 
 
+# Derived PnL caches and the money column whose affinity tells us the schema era.
+# Pre-Decimal databases stored these as REAL; the current schema uses TEXT.
+_MONEY_TABLE_COLS = {
+    "pnl_lots": "amount_remaining",
+    "pnl_history": "realized_pnl",
+    "unmatched_sells": "amount",
+}
+
+
+def _migrate_money_columns_to_text(conn) -> None:
+    """One-shot migration: drop derived PnL tables still on the old REAL schema.
+
+    ``CREATE TABLE IF NOT EXISTS`` is a no-op on an existing table, so it can't
+    change a column's type — and a REAL-affinity column silently coerces an
+    inserted Decimal *string* back to float, defeating the exact-accounting
+    guarantee. These three tables are derived caches (recomputed from
+    ``token_transfers`` by the daily PnL run), so the safe fix is to drop any that
+    are still REAL and let ``init_db`` recreate them as TEXT; the next PnL run
+    repopulates them exactly. Idempotent: once a table is TEXT, this does nothing.
+    """
+    for table, col in _MONEY_TABLE_COLS.items():
+        info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        col_type = {row[1]: (row[2] or "").upper() for row in info}.get(col)
+        if col_type is not None and col_type != "TEXT":
+            log.warning(
+                "Migrating %s.%s from %s to TEXT: dropping derived cache; "
+                "rerun the PnL job to repopulate it exactly.", table, col, col_type,
+            )
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
 def init_db() -> None:
     with get_conn() as conn:
+        # Heal pre-Decimal schemas before (re)creating the tables below.
+        _migrate_money_columns_to_text(conn)
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS wallets (
                 address     TEXT PRIMARY KEY,
