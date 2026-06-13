@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/hakan-tasar12/onchain-smart-money/actions/workflows/ci.yml/badge.svg)](https://github.com/hakan-tasar12/onchain-smart-money/actions/workflows/ci.yml)
 
-Open-source on-chain tracker for Ethereum wallets. Tracks token flows, computes realized PnL with a FIFO engine, scores wallets on four metrics, and sends Telegram alerts when 2+ wallets accumulate the same token.
+Open-source on-chain tracker for Ethereum wallets. Tracks token flows, computes realized PnL with a FIFO engine, scores wallets on four metrics, sends Telegram alerts when 2+ wallets accumulate the same token, and answers on-demand queries through an interactive Telegram bot.
 
 ![Dashboard — wallet KPIs, token net positions, and recent ETH/token transfers](docs/dashboard.png)
 
@@ -70,9 +70,29 @@ Add your API keys to `.env`, then add wallet addresses to `watchlist.txt`.
 streamlit run app.py     # dashboard at http://localhost:8501
 python run_hourly.py     # ingest + alerts
 python run_daily.py      # PnL + scoring (first run: 5-10 min)
+python run_bot.py        # interactive Telegram bot (long-running)
 ```
 
-VPS scheduler: `bash deploy/setup_systemd.sh`
+VPS scheduler + bot service: `bash deploy/setup_systemd.sh`
+
+## Telegram bot
+
+The dashboard needs a laptop and an SSH tunnel; the bot is the interface from
+your phone. It **long-polls** the Telegram API — no inbound port, no public
+webhook — and replies **only** to the chat IDs in `TELEGRAM_CHAT_ID`
+(comma-separated), so the token alone can't expose your positions.
+
+| Command | What it returns |
+|---|---|
+| `/top` | Best-performing watched wallets, by composite score |
+| `/wallet <name>` | A wallet's realized PnL, coverage, and top wins/losses |
+| `/token <symbol>` | Which watched wallets hold a token (consensus check) |
+| `/movers` | Recent consensus accumulations (≥2 wallets, last 48h) |
+| `/help` | Lists every command |
+
+Consensus alerts carry inline buttons (**📊 Holders**, **🏆 Top**) that drill
+into the same queries without typing. Commands are read-only and reuse the same
+`src/db` functions the dashboard reads from.
 
 ## Files
 
@@ -85,9 +105,12 @@ VPS scheduler: `bash deploy/setup_systemd.sh`
 | `src/ingest.py` | Etherscan to SQLite |
 | `src/pnl.py` | FIFO PnL engine |
 | `src/scoring.py` | Wallet scoring |
-| `src/alerts.py` | Telegram alerts |
+| `src/telegram_api.py` | Low-level Telegram Bot API client (shared) |
+| `src/alerts.py` | Consensus accumulation alerts |
+| `src/bot.py` | Interactive bot: commands, auth, long-poll loop |
 | `run_hourly.py` | Ingest + alerts |
 | `run_daily.py` | PnL + scoring |
+| `run_bot.py` | Telegram bot entry point |
 | `app.py` | Streamlit dashboard |
 
 ## Stack

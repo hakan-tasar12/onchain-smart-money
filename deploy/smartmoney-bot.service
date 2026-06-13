@@ -1,0 +1,16 @@
+[Unit]
+Description=Smart Money Interactive Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/onchain-smart-money
+ExecStart=/root/onchain-smart-money/.venv/bin/python run_bot.py
+EnvironmentFile=/root/onchain-smart-money/.env
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

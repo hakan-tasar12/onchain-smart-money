@@ -236,6 +236,46 @@ def get_token_transfers_for_pnl(wallet_address: str, since_ts: int = 0) -> list[
     return [dict(r) for r in rows]
 
 
+def find_contracts_for_symbol(symbol: str) -> list[dict]:
+    """Contracts whose transfers carry this symbol, most-traded first.
+
+    A symbol is not unique (scam tokens spoof legit tickers), so this returns
+    every matching contract ranked by transfer count — the caller treats the
+    busiest one as the real token.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT contract, symbol, COUNT(*) AS n
+               FROM token_transfers WHERE LOWER(symbol) = LOWER(?)
+               GROUP BY contract ORDER BY n DESC""",
+            (symbol,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_token_net_holders(contract: str) -> list[dict]:
+    """Watched wallets with a net-positive position in this contract, largest first.
+
+    Net position = signed sum of transfers (buys are +, sells are −), so a
+    positive total means the wallet still holds the token.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT t.wallet_address, w.label,
+                      SUM(t.amount) AS net_amount,
+                      MAX(t.block_ts) AS last_ts,
+                      MAX(t.symbol) AS symbol
+               FROM token_transfers t
+               LEFT JOIN wallets w ON w.address = t.wallet_address
+               WHERE LOWER(t.contract) = LOWER(?)
+               GROUP BY t.wallet_address
+               HAVING net_amount > 0
+               ORDER BY net_amount DESC""",
+            (contract,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_recent_token_accumulations(hours: int = 1) -> list[dict]:
     """Tokens with IN transfers from 2 or more distinct wallets in the last N hours."""
     since_ts = int(time.time()) - hours * 3600
