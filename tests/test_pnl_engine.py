@@ -34,7 +34,14 @@ def engine(monkeypatch):
     """Fresh temp DB + deterministic prices. Returns a runner taking transfers."""
     monkeypatch.setattr(db, "DB_PATH", Path(tempfile.mktemp(suffix=".db")))
     db.init_db()
-    monkeypatch.setattr(pnl, "_get_historical_price", lambda coin_id, ts: PRICES[ts])
+    # The engine prices via _get_price_series (one fetch per coin) -> _price_on_day
+    # (lookup per trade). These tiny timestamps would collide on a single calendar
+    # day, so we stub the lookup to resolve by exact timestamp instead — the point
+    # of these tests is persistence wiring, not the day-bucketing (see
+    # test_pnl_prices.py for that). The series just needs to be truthy.
+    monkeypatch.setattr(pnl, "_get_price_series",
+                        lambda cid, frm, to, deadline=None: {"_": 1.0})
+    monkeypatch.setattr(pnl, "_price_on_day", lambda series, ts: PRICES[ts])
 
     def run(transfers):
         monkeypatch.setattr(pnl, "get_token_transfers_for_pnl",
