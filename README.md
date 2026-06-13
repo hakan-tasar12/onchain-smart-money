@@ -94,6 +94,10 @@ webhook — and replies **only** to the chat IDs in `TELEGRAM_CHAT_ID`
 | `/movers` | Recent consensus accumulations (≥2 wallets, last 48h) |
 | `/help` | Lists every command |
 
+Consensus accumulations and alerts **exclude stablecoins** (USDC, USDT, DAI, …):
+a wallet receiving USDC is parking cash, not making a directional bet, so it carries
+no conviction signal.
+
 Consensus alerts carry inline buttons (**📊 Holders**, **🏆 Top**) that drill
 into the same queries without typing. Commands are read-only and reuse the same
 `src/db` functions the dashboard reads from.
