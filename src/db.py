@@ -80,10 +80,31 @@ def _migrate_money_columns_to_text(conn) -> None:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
 
 
+def _migrate_pnl_lots_cost_nullable(conn) -> None:
+    """Drop pnl_lots if cost_usd_per_unit is still NOT NULL.
+
+    An open lot bought at an unknown price has no cost basis, so the column must
+    allow NULL — that lets the lot's acquisition still be recorded (it feeds the
+    early-entry score) without inventing a fake $0 cost. pnl_lots is a derived
+    cache recomputed by the daily PnL run, so dropping it is safe. Idempotent:
+    once the column is nullable this does nothing.
+    """
+    for row in conn.execute("PRAGMA table_info(pnl_lots)").fetchall():
+        # row = (cid, name, type, notnull, dflt_value, pk)
+        if row[1] == "cost_usd_per_unit" and row[3] == 1:
+            log.warning(
+                "Migrating pnl_lots.cost_usd_per_unit to nullable: dropping derived "
+                "cache; rerun the PnL job to repopulate it."
+            )
+            conn.execute("DROP TABLE IF EXISTS pnl_lots")
+            break
+
+
 def init_db() -> None:
     with get_conn() as conn:
         # Heal pre-Decimal schemas before (re)creating the tables below.
         _migrate_money_columns_to_text(conn)
+        _migrate_pnl_lots_cost_nullable(conn)
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS wallets (
                 address     TEXT PRIMARY KEY,
@@ -121,7 +142,7 @@ def init_db() -> None:
                 contract            TEXT NOT NULL,
                 acquired_ts         INTEGER NOT NULL,
                 amount_remaining    TEXT NOT NULL,   -- Decimal string (exact)
-                cost_usd_per_unit   TEXT NOT NULL    -- Decimal string (exact)
+                cost_usd_per_unit   TEXT             -- Decimal string (exact); NULL if bought at an unknown price
             );
 
             CREATE TABLE IF NOT EXISTS pnl_history (
@@ -323,7 +344,8 @@ def insert_pnl_lot(
                (wallet_address, contract, acquired_ts, amount_remaining, cost_usd_per_unit)
                VALUES (?, ?, ?, ?, ?)""",
             (wallet_address.lower(), contract.lower(), acquired_ts,
-             _money_str(amount), _money_str(cost_usd_per_unit)),
+             _money_str(amount),
+             None if cost_usd_per_unit is None else _money_str(cost_usd_per_unit)),
         )
 
 

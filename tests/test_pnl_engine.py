@@ -91,3 +91,25 @@ def test_recompute_is_idempotent(engine):
     engine(transfers)
     engine(transfers)
     assert len(db.get_pnl_history(WALLET)) == 1
+
+
+def test_unpriced_open_lot_persists_with_null_cost(monkeypatch):
+    """A buy at an unknown price left open is stored with cost_usd_per_unit = NULL.
+
+    The lot's acquisition must still be recorded (it feeds early-entry scoring),
+    but its cost is genuinely unknown — NULL, never a fabricated 0.
+    """
+    monkeypatch.setattr(db, "DB_PATH", Path(tempfile.mktemp(suffix=".db")))
+    db.init_db()
+    monkeypatch.setattr(pnl, "_get_price_series",
+                        lambda cid, frm, to, deadline=None: {"_": 1.0})
+    monkeypatch.setattr(pnl, "_price_on_day", lambda series, ts: None)  # price unknown
+    monkeypatch.setattr(pnl, "get_token_transfers_for_pnl",
+                        lambda w, since_ts=0: [_tx(0, 10, 1)])  # a single open buy
+
+    pnl._process_wallet_pnl(WALLET, CMAP)
+
+    lots = db.get_pnl_lots(WALLET, CONTRACT)
+    assert len(lots) == 1
+    assert lots[0]["amount_remaining"] == Decimal("10")
+    assert lots[0]["cost_usd_per_unit"] is None
