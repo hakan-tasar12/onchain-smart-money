@@ -19,6 +19,11 @@ Conventions (must match the engine and the README's Methodology section):
 - A sell with no open lot has unknown cost basis: it is recorded as *unmatched*
   (``no_lot``), never counted as zero-cost profit. Selling more than the open
   lots hold records the surplus as ``partial_no_lot``.
+- A buy or sell whose USD price is unavailable (``price_fn`` returns ``None``)
+  cannot be valued. Inventory is still tracked (the tokens really moved), but any
+  matched amount that touches an unpriced lot or an unpriced sell is recorded as
+  *unmatched* (``no_price``) rather than realized at a fabricated $0. This keeps a
+  missing price from silently inventing profit or loss — it lowers coverage instead.
 """
 from __future__ import annotations
 
@@ -42,12 +47,13 @@ def _dec(value) -> Decimal:
 @dataclass
 class Lot:
     acquired_ts: int
-    cost_per_unit: Decimal
+    cost_per_unit: Decimal | None  # None = bought at an unknown price (unpriced lot)
     amount: Decimal
     remaining: Decimal = field(default=None)  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        self.cost_per_unit = _dec(self.cost_per_unit)
+        # None is preserved: an unpriced lot still holds inventory but has no cost basis.
+        self.cost_per_unit = None if self.cost_per_unit is None else _dec(self.cost_per_unit)
         self.amount = _dec(self.amount)
         self.remaining = self.amount if self.remaining is None else _dec(self.remaining)
 
@@ -68,11 +74,11 @@ class Fill:
 
 @dataclass
 class Unmatched:
-    """A sell (or part of one) with no known cost basis."""
+    """A sell (or part of one) that cannot be realized into PnL."""
     ts: int
     symbol: str
     amount: Decimal
-    reason: str  # "no_lot" | "partial_no_lot"
+    reason: str  # "no_lot" | "partial_no_lot" | "no_price"
 
 
 @dataclass
@@ -106,7 +112,8 @@ def match_fifo(
     <0 sell), optional ``id`` (tie-breaker), optional ``symbol``. Processed in
     (block_ts, id) order.
     ``price_fn``: maps a timestamp to a USD unit price (called once per buy and
-    once per matched sell). Its return value is coerced to Decimal.
+    once per matched sell). A returned number is coerced to Decimal; ``None`` means
+    the price is unknown and the affected amount is recorded as ``no_price``.
     """
     txns = sorted(transfers, key=lambda t: (t["block_ts"], t.get("id", 0)))
 
@@ -123,8 +130,10 @@ def match_fifo(
         if amount < EPS:
             continue
 
-        if signed > 0:  # buy — open a lot
-            lots.append(Lot(acquired_ts=ts, cost_per_unit=_dec(price_fn(ts)), amount=amount))
+        if signed > 0:  # buy — open a lot (unpriced if price_fn returns None)
+            buy_price = price_fn(ts)
+            cost = None if buy_price is None else _dec(buy_price)
+            lots.append(Lot(acquired_ts=ts, cost_per_unit=cost, amount=amount))
             continue
 
         # sell — consume open lots FIFO
@@ -138,22 +147,32 @@ def match_fifo(
             wash_skipped += 1
             continue
 
-        sell_price = _dec(price_fn(ts))
+        raw_sell_price = price_fn(ts)
+        sell_price = None if raw_sell_price is None else _dec(raw_sell_price)
         remaining_to_sell = amount
         cost_basis = Decimal("0")
         proceeds = Decimal("0")
+        priced_amount = Decimal("0")    # consumed against priced lots with a known sell price
+        unpriced_amount = Decimal("0")  # consumed, but sell or lot price unknown -> not realizable
         for lot in open_lots:
             if remaining_to_sell <= EPS:
                 break
             used = min(lot.remaining, remaining_to_sell)
-            cost_basis += used * lot.cost_per_unit
-            proceeds += used * sell_price
+            # A round trip is realizable only if BOTH ends are priced; otherwise the
+            # tokens still leave inventory but the PnL is recorded as no_price.
+            if sell_price is None or lot.cost_per_unit is None:
+                unpriced_amount += used
+            else:
+                cost_basis += used * lot.cost_per_unit
+                proceeds += used * sell_price
+                priced_amount += used
             lot.remaining -= used
             remaining_to_sell -= used
 
-        matched = amount - remaining_to_sell
-        if matched > EPS:
-            fills.append(Fill(ts, symbol, matched, cost_basis, proceeds))
+        if priced_amount > EPS:
+            fills.append(Fill(ts, symbol, priced_amount, cost_basis, proceeds))
+        if unpriced_amount > EPS:
+            unmatched.append(Unmatched(ts, symbol, unpriced_amount, "no_price"))
         if remaining_to_sell > EPS:
             unmatched.append(Unmatched(ts, symbol, remaining_to_sell, "partial_no_lot"))
 

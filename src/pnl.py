@@ -25,7 +25,14 @@ HIST_CACHE_DIR = Path(".cache/prices/historical")
 TWELVE_MONTHS_SECONDS = 365 * 24 * 3600
 
 
-def _get_historical_price(coin_id: str, ts: int) -> float:
+def _get_historical_price(coin_id: str, ts: int) -> float | None:
+    """USD price for a coin on a given day, or None if unavailable.
+
+    Returns None (never a fabricated 0.0) when the price cannot be obtained, so the
+    FIFO core records the trade as ``no_price`` instead of inventing PnL. A non-
+    positive price is also treated as unavailable: a $0 historical price is never a
+    usable value, and this auto-heals any 0.0 that a prior interrupted run cached.
+    """
     # Persistent cache is safe here — historical prices don't change.
     HIST_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     dt = datetime.fromtimestamp(ts, tz=timezone.utc)
@@ -34,7 +41,10 @@ def _get_historical_price(coin_id: str, ts: int) -> float:
 
     if cache_file.exists():
         try:
-            return json.loads(cache_file.read_text()).get("usd", 0.0)
+            usd = json.loads(cache_file.read_text()).get("usd")
+            if usd is not None and usd > 0:
+                return usd
+            # cached miss (None or <=0) -> fall through and try to fetch a real price
         except Exception:
             pass
 
@@ -51,15 +61,20 @@ def _get_historical_price(coin_id: str, ts: int) -> float:
             if r.status_code != 200:
                 break
             data = r.json()
-            price = (data.get("market_data") or {}).get("current_price", {}).get("usd", 0.0)
-            cache_file.write_text(json.dumps({"usd": price, "date": date_str}))
-            time.sleep(0.6)  # CoinGecko free tier: ~10 req/s
-            return price
+            price = (data.get("market_data") or {}).get("current_price", {}).get("usd")
+            if price is not None and price > 0:
+                cache_file.write_text(json.dumps({"usd": price, "date": date_str}))
+                time.sleep(0.6)  # CoinGecko free tier: ~10 req/s
+                return price
+            # CoinGecko had no price for this coin/day — cache the miss so we don't refetch
+            cache_file.write_text(json.dumps({"usd": None, "date": date_str}))
+            time.sleep(0.6)
+            return None
         except Exception as e:
             log.warning(f"Historical price {coin_id} {date_str}: {e}")
             time.sleep(2)
 
-    return 0.0
+    return None
 
 
 def _process_wallet_pnl(wallet_address: str, cmap: dict) -> dict:
@@ -84,11 +99,13 @@ def _process_wallet_pnl(wallet_address: str, cmap: dict) -> dict:
         # FIFO matching is delegated to the pure, unit-tested core (src/fifo.py).
         # This module only handles I/O: pricing (CoinGecko) and persistence (SQLite).
         # CoinGecko returns float prices; convert to Decimal at this boundary via
-        # str() so the accounting core stays exact.
-        result = match_fifo(
-            contract_txns,
-            price_fn=lambda ts, _cid=coin_id: Decimal(str(_get_historical_price(_cid, ts))),
-        )
+        # str() so the accounting core stays exact. A None price is passed through
+        # unchanged so the core records the trade as no_price, never a $0 fill.
+        def _price(ts, _cid=coin_id):
+            p = _get_historical_price(_cid, ts)
+            return None if p is None else Decimal(str(p))
+
+        result = match_fifo(contract_txns, price_fn=_price)
 
         # Persist open lots (final remaining), realized fills, and unmatched sells.
         for lot in result.lots:

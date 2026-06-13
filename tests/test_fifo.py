@@ -142,3 +142,52 @@ def test_decimal_avoids_float_accumulation_error():
     assert sum((f.proceeds for f in r.fills), Decimal("0")) == Decimal("0.3")
     # the lot is fully consumed — no floating-point dust left behind
     assert all(lot.remaining == Decimal("0") for lot in r.lots)
+
+
+# ── Missing prices (no_price) — a missing price must never invent PnL ───────────
+
+def price_or_none(mapping):
+    """Price function that returns None for any timestamp absent from the table."""
+    return lambda ts: (None if mapping.get(ts) is None else Decimal(str(mapping[ts])))
+
+
+def test_sell_with_unknown_price_is_no_price_not_zero_proceeds():
+    """Buy @ $1, sell when the sell price is unknown.
+
+    The old engine priced the sell at $0 → a phantom $10 loss. The fix records the
+    matched amount as no_price (unrealized), produces no fill, and still consumes
+    the lot's inventory.
+    """
+    r = match_fifo([buy(0, 10), sell(100, 10)], price_or_none({0: 1, 100: None}))
+    assert r.fills == []                              # nothing realized
+    assert r.realized_pnl == Decimal("0")
+    assert [u.reason for u in r.unmatched] == ["no_price"]
+    assert r.unmatched[0].amount == Decimal("10")
+    assert all(lot.remaining == Decimal("0") for lot in r.lots)  # inventory consumed
+
+
+def test_unpriced_buy_then_priced_sell_is_no_price():
+    """Buy at an unknown price, later sell at a known price.
+
+    Cost basis is unknown, so the round trip cannot be realized — it is no_price,
+    not a full-proceeds phantom profit.
+    """
+    r = match_fifo([buy(0, 10), sell(100, 10)], price_or_none({0: None, 100: 5}))
+    assert r.fills == []
+    assert [u.reason for u in r.unmatched] == ["no_price"]
+    assert r.unmatched[0].amount == Decimal("10")
+
+
+def test_mixed_priced_and_unpriced_lots_split_fill_and_no_price():
+    """Two 10-unit lots — first unpriced, second @ $1 — sold together @ $2.
+
+    Only the priced lot's 10 units realize ($20 proceeds - $10 cost = $10). The
+    unpriced lot's 10 units become no_price. One fill + one unmatched.
+    """
+    txns = [buy(0, 10, 1), buy(100, 10, 2), sell(200, 20, 3)]
+    r = match_fifo(txns, price_or_none({0: None, 100: 1, 200: 2}))
+    assert len(r.fills) == 1
+    assert r.fills[0].matched_amount == Decimal("10")
+    assert r.fills[0].realized_pnl == Decimal("10")
+    assert [u.reason for u in r.unmatched] == ["no_price"]
+    assert r.unmatched[0].amount == Decimal("10")
