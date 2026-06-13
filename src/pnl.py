@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 SERIES_CACHE_DIR = Path(".cache/prices/series")
 TWELVE_MONTHS_SECONDS = 365 * 24 * 3600
 SERIES_TTL = 24 * 3600              # refetch a coin's daily series at most once a day
+NEGATIVE_TTL = 14 * 24 * 3600      # a coin CoinGecko has no data for: don't retry for 2 weeks
 _MIN_CALL_GAP = 2.0                 # min seconds between CoinGecko calls (global throttle)
 PER_WALLET_BUDGET = 180            # max seconds of new price fetching per wallet
 
@@ -52,8 +53,12 @@ def _fetch_price_series(coin_id: str, from_ts: int, to_ts: int) -> dict[str, flo
     Replaces the old per-day /coins/{id}/history endpoint (one HTTP call per
     calendar day) with a single range call that returns every daily point for the
     window. For wallets with hundreds of trade-days this collapses thousands of
-    sequential calls — and their rate-limit stalls — into one. Returns a
-    {YYYY-MM-DD: price} map; an empty map on failure (→ all prices None → no_price).
+    sequential calls — and their rate-limit stalls — into one.
+
+    Returns a {YYYY-MM-DD: price} map on success (an empty map means CoinGecko
+    genuinely has no data for this coin — delisted / never listed). Returns ``None``
+    on a transient failure (429 exhausted, non-200, timeout) so the caller can tell
+    "no data" apart from "fetch failed" and only negative-cache the former.
 
     For ranges over 90 days CoinGecko free returns daily granularity, which is
     exactly the daily-close basis the PnL methodology already documents.
@@ -71,17 +76,17 @@ def _fetch_price_series(coin_id: str, from_ts: int, to_ts: int) -> dict[str, flo
                 continue
             if r.status_code != 200:
                 log.warning(f"Price series {coin_id}: HTTP {r.status_code}")
-                return {}
+                return None  # transient/unknown — do not negative-cache
             series: dict[str, float] = {}
             for ms, price in r.json().get("prices", []):
                 if price and price > 0:
                     # Keep the last point seen for each UTC day (the daily close).
                     series[_day_str(int(ms / 1000))] = price
-            return series
+            return series  # may be {} = genuine no-data (negative-cacheable)
         except Exception as e:
             log.warning(f"Price series {coin_id}: {e}")
             time.sleep(2)
-    return {}
+    return None  # all attempts failed — transient, retry next run
 
 
 def _get_price_series(
@@ -89,35 +94,51 @@ def _get_price_series(
 ) -> dict[str, float]:
     """Daily price series for a coin, served from memory → disk (24h) → network.
 
-    Cached reads (memory/disk) are always served. A network fetch is skipped once
-    the per-wallet ``deadline`` has passed, so a single heavy wallet cannot stall
-    the whole run — its un-cached coins simply resolve to no_price this time.
+    Cached reads (memory/disk) are always served. A coin CoinGecko has no data for
+    is negative-cached as an empty series for NEGATIVE_TTL (2 weeks) so dead/
+    delisted tokens aren't re-fetched on every daily run — without this each heavy
+    wallet wastes its whole price budget re-probing the same hundreds of dead
+    tokens, so coverage never climbs. A network fetch is skipped once the per-wallet
+    ``deadline`` has passed, so a single heavy wallet cannot stall the run.
     """
     if coin_id in _series_mem:
         return _series_mem[coin_id]
 
     SERIES_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_file = SERIES_CACHE_DIR / f"{coin_id}.json"
-    if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < SERIES_TTL:
+    if cache_file.exists():
+        age = time.time() - cache_file.stat().st_mtime
         try:
-            series = json.loads(cache_file.read_text())
-            _series_mem[coin_id] = series
-            return series
+            cached = json.loads(cache_file.read_text())
         except Exception:
-            pass
+            cached = None
+        # A real series is fresh for SERIES_TTL; a negative (empty) cache, which
+        # marks a coin with no data, is trusted far longer (NEGATIVE_TTL).
+        if cached and age < SERIES_TTL:
+            _series_mem[coin_id] = cached
+            return cached
+        if cached == {} and age < NEGATIVE_TTL:
+            _series_mem[coin_id] = {}
+            return {}
 
     if deadline is not None and time.time() > deadline:
-        return {}  # out of budget — don't start a new network fetch
+        return {}  # out of budget — don't start a new network fetch (not cached)
 
     # Pad the window by a day each side so trades near the edges still resolve.
-    series = _fetch_price_series(coin_id, from_ts - 86400, to_ts + 86400)
-    if series:  # only persist a real series; a failed fetch retries next run
-        try:
-            cache_file.write_text(json.dumps(series))
-        except Exception:
-            pass
-    _series_mem[coin_id] = series
-    return series
+    fetched = _fetch_price_series(coin_id, from_ts - 86400, to_ts + 86400)
+    if fetched is None:
+        # Transient failure: serve empty for this run but DON'T persist, so the
+        # coin is retried next run rather than wrongly marked dead for two weeks.
+        _series_mem[coin_id] = {}
+        return {}
+
+    # Persist both real series and genuine-empty (negative) results.
+    try:
+        cache_file.write_text(json.dumps(fetched))
+    except Exception:
+        pass
+    _series_mem[coin_id] = fetched
+    return fetched
 
 
 def _price_on_day(series: dict[str, float], ts: int) -> float | None:
