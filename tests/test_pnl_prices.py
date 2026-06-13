@@ -52,3 +52,53 @@ def test_get_price_series_past_deadline_skips_network_and_returns_empty():
     # so the wallet's un-cached coins resolve to no_price instead of stalling.
     out = pnl._get_price_series("never-fetched-coin", 0, 1, deadline=time.time() - 1)
     assert out == {}
+
+
+# ── Negative caching (dead tokens) ───────────────────────────────────────────
+
+def test_genuine_empty_is_negative_cached_and_not_refetched(tmp_path, monkeypatch):
+    """A coin CoinGecko has no data for ({} from fetch) is persisted and reused.
+
+    The second lookup must NOT hit the network — otherwise every daily run wastes
+    its budget re-probing the same dead tokens.
+    """
+    monkeypatch.setattr(pnl, "SERIES_CACHE_DIR", tmp_path)
+    calls = {"n": 0}
+
+    def fake_fetch(coin_id, frm, to):
+        calls["n"] += 1
+        return {}  # genuine no-data
+
+    monkeypatch.setattr(pnl, "_fetch_price_series", fake_fetch)
+
+    assert pnl._get_price_series("deadcoin", 0, 1) == {}
+    pnl._series_mem.clear()  # force a disk read on the next call, not the mem hit
+    assert pnl._get_price_series("deadcoin", 0, 1) == {}
+    assert calls["n"] == 1                       # fetched once, then served from disk
+    assert (tmp_path / "deadcoin.json").exists()  # negative result persisted
+
+
+def test_transient_failure_is_not_persisted(tmp_path, monkeypatch):
+    """A transient fetch failure (None) must not be negative-cached as a dead token."""
+    monkeypatch.setattr(pnl, "SERIES_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(pnl, "_fetch_price_series", lambda c, f, t: None)
+
+    assert pnl._get_price_series("flaky", 0, 1) == {}
+    assert not (tmp_path / "flaky.json").exists()  # not persisted -> retried next run
+
+
+def test_real_series_is_persisted_and_served(tmp_path, monkeypatch):
+    monkeypatch.setattr(pnl, "SERIES_CACHE_DIR", tmp_path)
+    series = {"2021-05-09": 3950.0}
+    calls = {"n": 0}
+
+    def fake_fetch(coin_id, frm, to):
+        calls["n"] += 1
+        return series
+
+    monkeypatch.setattr(pnl, "_fetch_price_series", fake_fetch)
+
+    assert pnl._get_price_series("weth", 0, 1) == series
+    pnl._series_mem.clear()
+    assert pnl._get_price_series("weth", 0, 1) == series
+    assert calls["n"] == 1  # served from disk the second time
