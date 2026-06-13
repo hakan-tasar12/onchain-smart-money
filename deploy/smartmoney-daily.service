@@ -7,5 +7,9 @@ Type=oneshot
 WorkingDirectory=/root/onchain-smart-money
 ExecStart=/root/onchain-smart-money/.venv/bin/python run_daily.py
 EnvironmentFile=/root/onchain-smart-money/.env
+# Hard backstop: the per-wallet 180s price-fetch budget in src/pnl.py is the real
+# guard (worst case ~20 wallets * 180s). This ceiling just guarantees systemd
+# reclaims the job instead of letting a hang run forever.
+TimeoutStartSec=3900
 StandardOutput=journal
 StandardError=journal

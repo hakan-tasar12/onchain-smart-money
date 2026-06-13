@@ -30,6 +30,10 @@ can be read correctly:
   before the 12-month window), it is recorded as *unmatched* and **excluded from
   PnL — not set to zero**. The **Coverage %** reported per wallet is the fraction
   of sells with a known cost basis, i.e. how much to trust that wallet's PnL.
+- **Missing prices never invent PnL.** When CoinGecko has no price for a token on a
+  trade's day, that trade is recorded as `no_price` and **excluded from PnL**, never
+  realized at a fabricated $0 (which would book a phantom gain or loss). A missing
+  price lowers Coverage % rather than corrupting the number.
 - **Wash-trade guard.** Sells against a lot younger than **60 seconds** are
   skipped, to drop intraday round-trips and arbitrage noise.
 - **Spam filtering.** Tokens absent from CoinGecko are dropped; a regex catches
