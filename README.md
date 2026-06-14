@@ -4,7 +4,7 @@
 
 Open-source on-chain tracker for Ethereum wallets. Tracks token flows, computes realized PnL with a FIFO engine, scores wallets on four metrics, sends Telegram alerts when 2+ wallets accumulate the same token, and answers on-demand queries through an interactive Telegram bot.
 
-![Dashboard — wallet KPIs, token net positions, and recent ETH/token transfers](docs/dashboard.png)
+![Dashboard — wallet score leaderboard: composite score, win-rate, realized PnL, and coverage per tracked wallet](docs/dashboard.png)
 
 ## How it works
 
@@ -59,7 +59,7 @@ Stated up front, because what a model *doesn't* do matters as much as what it do
 ## Setup
 
 ```bash
-git clone https://github.com/your-username/onchain-smart-money.git
+git clone https://github.com/hakan-tasar12/onchain-smart-money.git
 cd onchain-smart-money
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
