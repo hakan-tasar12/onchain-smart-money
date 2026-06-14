@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 SERIES_CACHE_DIR = Path(".cache/prices/series")
 TWELVE_MONTHS_SECONDS = 365 * 24 * 3600
+_FREE_TIER_SAFETY = 2 * 24 * 3600  # 2-day buffer inside 365-day CoinGecko free-tier wall
 SERIES_TTL = 24 * 3600              # refetch a coin's daily series at most once a day
 NEGATIVE_TTL = 14 * 24 * 3600      # a coin CoinGecko has no data for: don't retry for 2 weeks
 _MIN_CALL_GAP = 2.0                 # min seconds between CoinGecko calls (global throttle)
@@ -63,6 +64,16 @@ def _fetch_price_series(coin_id: str, from_ts: int, to_ts: int) -> dict[str, flo
     For ranges over 90 days CoinGecko free returns daily granularity, which is
     exactly the daily-close basis the PnL methodology already documents.
     """
+    # Free-tier wall: requests with `from` older than ~365 days get HTTP 401.
+    # Clamp to stay inside the window. Trades older than the wall become no_price
+    # → unmatched_sells (lower coverage), which is correct — never a $0 fill.
+    wall = int(time.time()) - TWELVE_MONTHS_SECONDS + _FREE_TIER_SAFETY
+    from_ts = max(from_ts, wall)
+    # If the entire price window is older than the wall (all activity >365d ago),
+    # skip the request — it would return 401 and there is no usable data anyway.
+    if from_ts >= to_ts:
+        return {}  # genuine no-data for this wallet's activity window; caller may negative-cache
+
     for attempt in range(4):
         try:
             _throttle()
@@ -74,6 +85,12 @@ def _fetch_price_series(coin_id: str, from_ts: int, to_ts: int) -> dict[str, flo
             if r.status_code == 429:
                 time.sleep(5 * (attempt + 1))
                 continue
+            if r.status_code == 401:
+                # Hard range error from CoinGecko free tier — not retryable and
+                # not a sign the coin is dead. Return None so the caller skips
+                # persistence and retries next run with a fresh (closer) window.
+                log.warning(f"Price series {coin_id}: HTTP 401 (range out of bounds)")
+                return None
             if r.status_code != 200:
                 log.warning(f"Price series {coin_id}: HTTP {r.status_code}")
                 return None  # transient/unknown — do not negative-cache
@@ -125,6 +142,8 @@ def _get_price_series(
         return {}  # out of budget — don't start a new network fetch (not cached)
 
     # Pad the window by a day each side so trades near the edges still resolve.
+    # The lower bound is further clamped inside _fetch_price_series to respect
+    # the CoinGecko free-tier 365-day wall.
     fetched = _fetch_price_series(coin_id, from_ts - 86400, to_ts + 86400)
     if fetched is None:
         # Transient failure: serve empty for this run but DON'T persist, so the
