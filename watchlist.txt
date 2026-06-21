@@ -1,10 +1,6 @@
 # Smart Money Watchlist
 # Format: address,Label
 #
-# ── EXAMPLE / TEST addresses (real addresses but not active traders — for pipeline testing) ──
-0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045,Vitalik Buterin (test)
-0xde0B295669a9FD93d5F28D9Ec85E40f4cB697BAE,Ethereum Foundation (test)
-#
 # ── VERIFIED smart money (on-chain checked via Etherscan) ──
 # Machi Big Brother — ENS machibigbrother.eth confirmed, 20k+ txs, active leveraged ETH trader, community-watched
 0x020cA66C30beC2c4Fe3861a94E4DB4A498A35872,Machi Big Brother
@@ -12,3 +8,37 @@
 0xd387a6e4e84a6c86bd90c158c6028a58cc8ac459,Pranksy (?)
 # ParaFi Capital — fund wallet, sourced from whallets docs (identity: medium confidence)
 0x4655b7ad0b5f5bacb9cf960bbffceb3f0e51f363,ParaFi Capital (?)
+#
+# ── INDIVIDUAL TRADERS — high signal for PnL tracking ──
+# James Fickel — 5th-richest known crypto investor; large ETH + Aave leverage trades; source: Lookonchain, Finbold | confidence: HIGH
+0xd85351181b3F264ee0FDFa94518464d7c3DefaDa,James Fickel
+# Arthur Hayes — BitMEX co-founder; labeled on Etherscan + Arkham; active June 2026 | confidence: HIGH
+0xa86e3d1c80a750a310b484fb9bdc470753a7506f,Arthur Hayes
+# Tetranode — prominent DeFi power user; large CVX/Convex positions; labeled pennilesswassie.eth | confidence: HIGH
+0x9c5083dd4838e120dbeac44c052179692aa5dac5,Tetranode
+# Michael Egorov — Curve Finance founder; massive CRV/DeFi positions; active June 2026 | confidence: HIGH
+0x7a16ff8270133f063aab6c9977183d9e72835428,Michael Egorov (Curve)
+# Stani Kulechov — Aave founder; active personal wallet; sold $8.3M ETH on-chain | confidence: HIGH
+0x2e21f5d32841cf8c7da805185a041400bf15f21a,Stani Kulechov (Aave)
+# pension-usdt.eth — 20+ consecutive profitable leveraged trades per Lookonchain; address published verbatim | confidence: HIGH
+0x0ddf9bae2af4b874b96d287a5ad42eb47138a902,pension-usdt.eth
+# Kain Warwick — Synthetix founder; labeled on Etherscan | confidence: MEDIUM
+0x42f9134e9d3bf7eee1f8a5ac2a4328b059e7468c,Kain Warwick (Synthetix)
+# Andrew Kang — Mechanism Capital co-founder; known GMX/Hyperliquid trader | confidence: MEDIUM
+0xe8c19db00287e3536075114b2576c70773e039bd,Andrew Kang (Mechanism)
+#
+# ── INSTITUTIONAL / FUND WALLETS — lower PnL signal, broader coverage ──
+# DeFiance Capital — Asia DeFi VC fund (Arthur Cheong); labeled on Etherscan; $43M+ balance | confidence: HIGH
+0x7e4b4dc22111b84594d9b7707a8dcffd793d477a,DeFiance Capital
+# DeFiance Capital 1 — second DeFiance wallet; holds stkAAVE, INSUR, PSTAKE | confidence: HIGH
+0x9b5ea8c719e29a5bd0959faf79c9e5c8206d0499,DeFiance Capital 1
+# Abraxas Capital — FCA-regulated London fund; $3B AUM; 270k+ ETH in LSTs; active June 2026 | confidence: HIGH
+0xb99a2c4c1c4f1fc27150681b740396f6ce1cbcf5,Abraxas Capital
+# Cumberland DRW — institutional crypto market maker; 84k+ txs; active June 2026 | confidence: HIGH
+0xad6eaa735d9df3d7696fd03984379dae02ed8862,Cumberland DRW
+# Jump Trading — major HFT/market maker; labeled on Etherscan; $149M+ balance | confidence: HIGH
+0xf584f8728b874a6a5c7a8d4d387c9aae9172d621,Jump Trading
+# Dragonfly Capital — crypto VC; labeled on Etherscan; low recent activity | confidence: MEDIUM
+0x002A5dc50bbB8d5808e418Aeeb9F060a2Ca17346,Dragonfly Capital
+# a16z Crypto — Andreessen Horowitz crypto fund; active June 2026 | confidence: HIGH
+0x05e793ce0c6027323ac150f6d45c2344d28b6019,a16z Crypto
